@@ -1,1 +1,1 @@
-# strava-lb
+# strava-lib
