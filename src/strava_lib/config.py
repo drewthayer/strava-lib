@@ -20,8 +20,25 @@ ACTIVITIES_CSV = DATA_DIR / "activities.csv"
 REDIRECT_URI = os.environ.get("STRAVA_REDIRECT_URI", "http://localhost:8721/authorized")
 SCOPE = "activity:read_all"
 
+# Sheets is the sync target; ACTIVITIES_CSV above is now only read from, by
+# scripts/backfill_sheets.py, to seed the sheet with already-downloaded history.
 GOOGLE_SHEETS_SPREADSHEET_ID = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID")
-GOOGLE_SHEETS_CREDENTIALS_PATH = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH")
+# Used only when no spreadsheet id is set: the sheet is looked up by this title
+# in your Drive and created if it isn't there.
+GOOGLE_SHEETS_SPREADSHEET_TITLE = os.environ.get(
+    "GOOGLE_SHEETS_SPREADSHEET_TITLE", "Strava Activities"
+)
+GOOGLE_SHEETS_WORKSHEET_NAME = os.environ.get("GOOGLE_SHEETS_WORKSHEET_NAME", "activities")
+
+# The OAuth client JSON downloaded from Google Cloud, and the user token gspread
+# caches after the one-time browser approval. Both live in the data dir, which
+# is outside the repo.
+GOOGLE_SHEETS_CREDENTIALS_PATH = Path(
+    os.environ.get("GOOGLE_SHEETS_CREDENTIALS_PATH", str(DATA_DIR / "credentials.json"))
+)
+GOOGLE_SHEETS_TOKEN_PATH = Path(
+    os.environ.get("GOOGLE_SHEETS_TOKEN_PATH", str(DATA_DIR / "authorized_user.json"))
+)
 
 
 def save_refresh_token(token):

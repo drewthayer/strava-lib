@@ -1,10 +1,9 @@
 import time
 from datetime import datetime
 
-from . import config
 from .client import StravaClient
 from .models import build_record
-from .storage.csv_store import CsvStore
+from .storage import SheetsStore
 
 
 def _to_epoch(date_str):
@@ -48,8 +47,12 @@ def run(store=None, detail_pause=0.5):
 
     Both phases write each activity to `store` as soon as it's fetched, so a
     rate limit or crash only costs the activity in flight.
+
+    Defaults to appending to the Google Sheet, which is also where the resume
+    cursors come from — so seed it with scripts/backfill_sheets.py before the
+    first run, or Strava's whole history gets re-downloaded.
     """
-    store = store or CsvStore(config.ACTIVITIES_CSV)
+    store = store or SheetsStore()
     client = StravaClient()
     existing_ids = store.existing_ids()
     counter = [0]
@@ -71,8 +74,22 @@ def run(store=None, detail_pause=0.5):
         )
     except RuntimeError as e:
         print(f"\nStopped early: {e}")
+        _sort(store, counter[0])
         print(f"{counter[0]} new activities written this run. Re-run scripts/sync.py to continue.")
         return counter[0]
 
+    _sort(store, counter[0])
     print(f"Done. {counter[0]} new activities written to {getattr(store, 'path', store)}")
     return counter[0]
+
+
+def _sort(store, written):
+    """Re-sort the store by date once, at the end. Best-effort: everything is
+    already written at this point, so a failure here (a Sheets API blip, say)
+    only leaves rows out of order and shouldn't look like a failed sync."""
+    if not written:
+        return
+    try:
+        store.sort()
+    except Exception as e:  # noqa: BLE001 - ordering isn't worth failing the run over
+        print(f"Warning: couldn't sort stored rows by date: {e}")
