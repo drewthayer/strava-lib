@@ -229,3 +229,87 @@ def test_scopes_stay_narrow():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.file",
     ]
+
+
+# -- token recovery --------------------------------------------------------
+#
+# gspread runs the browser flow only when the token file is missing, so a file
+# holding a refresh token Google has since rejected must be moved aside or the
+# re-authorize silently can't happen.
+
+
+def make_refresh_error():
+    from google.auth.exceptions import RefreshError
+
+    return RefreshError("invalid_grant: Bad Request", {"error": "invalid_grant"})
+
+
+def test_rejected_token_is_moved_aside_when_interactive(
+    sheets_config, fake_google_auth, capsys
+):
+    from conftest import FakeCredentials
+
+    credentials_file, token = sheets_config
+    token.write_text('{"refresh_token": "dead"}')
+    fake_google_auth(FakeCredentials(valid=False, refresh_error=make_refresh_error()))
+
+    SheetsStore(interactive=True)._discard_rejected_token()
+
+    assert not token.exists()
+    assert token.with_name(token.name + ".rejected").read_text() == '{"refresh_token": "dead"}'
+    assert "re-authorizing" in capsys.readouterr().out
+
+
+def test_rejected_token_without_a_terminal_explains_the_cause(sheets_config, fake_google_auth):
+    from conftest import FakeCredentials
+
+    _, token = sheets_config
+    token.write_text('{"refresh_token": "dead"}')
+    fake_google_auth(FakeCredentials(valid=False, refresh_error=make_refresh_error()))
+
+    store = SheetsStore(interactive=False)
+    with pytest.raises(RuntimeError, match="Testing"):
+        store._discard_rejected_token()
+
+    assert token.exists(), "a cron run must not throw away the token it can't replace"
+
+
+def test_expired_token_is_refreshed_and_persisted(sheets_config, fake_google_auth):
+    from conftest import FakeCredentials
+
+    _, token = sheets_config
+    token.write_text('{"refresh_token": "live", "token": "old"}')
+    credentials = FakeCredentials(valid=False, json_text='{"refresh_token": "live", "token": "new"}')
+    fake_google_auth(credentials)
+
+    SheetsStore(interactive=False)._discard_rejected_token()
+
+    assert credentials.refreshed
+    assert token.read_text() == '{"refresh_token": "live", "token": "new"}'
+
+
+def test_valid_token_is_left_untouched(sheets_config, fake_google_auth):
+    from conftest import FakeCredentials
+
+    _, token = sheets_config
+    token.write_text('{"token": "still good"}')
+    credentials = FakeCredentials(valid=True)
+    fake_google_auth(credentials)
+
+    SheetsStore(interactive=False)._discard_rejected_token()
+
+    assert not credentials.refreshed
+    assert token.read_text() == '{"token": "still good"}'
+
+
+def test_revocation_mid_run_is_reported_not_raw(make_store, fake_google_auth):
+    from conftest import FakeCredentials
+
+    fake_google_auth(FakeCredentials())
+    store = make_store(FakeWorksheet())
+
+    def boom():
+        raise make_refresh_error()
+
+    with pytest.raises(RuntimeError, match="revoked access partway"):
+        store._call(boom)

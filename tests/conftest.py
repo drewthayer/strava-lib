@@ -138,3 +138,46 @@ def sheets_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "GOOGLE_SHEETS_TOKEN_PATH", token)
     monkeypatch.setattr(config, "GOOGLE_SHEETS_SPREADSHEET_ID", None)
     return credentials, token
+
+
+class FakeCredentials:
+    """Stands in for google-auth's user Credentials."""
+
+    def __init__(self, valid=False, refresh_error=None, json_text='{"refreshed": true}'):
+        self.valid = valid
+        self.refresh_error = refresh_error
+        self._json = json_text
+        self.refreshed = False
+
+    def refresh(self, request):
+        if self.refresh_error is not None:
+            raise self.refresh_error
+        self.refreshed = True
+        self.valid = True
+
+    def to_json(self):
+        return self._json
+
+
+@pytest.fixture
+def fake_google_auth(monkeypatch):
+    """Replace the google-auth seam with a credentials object of our choosing."""
+    from google.auth.exceptions import RefreshError
+
+    from strava_lib.storage import sheets_store
+
+    def install(credentials):
+        loaded = {}
+
+        class Credentials:
+            @staticmethod
+            def from_authorized_user_file(path):
+                loaded["path"] = path
+                return credentials
+
+        monkeypatch.setattr(
+            sheets_store, "_google_auth", lambda: (Credentials, object, RefreshError)
+        )
+        return loaded
+
+    return install

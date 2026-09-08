@@ -66,6 +66,19 @@ def _gspread():
     return gspread
 
 
+def _google_auth():
+    """The google-auth pieces needed to validate a cached token.
+
+    Grouped behind one seam so tests can substitute them, and imported lazily
+    for the same reason as gspread.
+    """
+    from google.auth.exceptions import RefreshError
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    return Credentials, Request, RefreshError
+
+
 def _cell(value):
     """Coerce one record value into something the Sheets API can serialize.
 
@@ -124,6 +137,8 @@ class SheetsStore(ActivityStore):
         # CSV backfill path usable) without gspread installed.
         gspread = _gspread()
 
+        self._discard_rejected_token()
+
         if not self.token_path.exists() and not self.interactive:
             raise RuntimeError(
                 f"Google Sheets isn't authorized yet and there's no terminal to approve "
@@ -136,6 +151,52 @@ class SheetsStore(ActivityStore):
             credentials_filename=str(self.credentials_path),
             authorized_user_filename=str(self.token_path),
         )
+
+    def _discard_rejected_token(self):
+        """Move aside a cached token Google no longer accepts, so a re-authorize
+        can actually happen.
+
+        gspread runs the browser flow only when the token *file* is missing — a
+        file holding a dead refresh token is loaded and used, and surfaces much
+        later as `RefreshError: invalid_grant: Bad Request`, which re-running the
+        authorize script wouldn't clear.
+
+        Refresh tokens die for ordinary reasons: Google expires them after 7 days
+        while the OAuth consent screen is in "Testing", and revoking the app's
+        access or changing the account password kills them immediately.
+
+        Refreshing here rather than letting gspread do it lazily also means the
+        renewed access token gets written back, which gspread never does.
+        """
+        if not self.token_path.exists():
+            return
+
+        Credentials, Request, RefreshError = _google_auth()
+        credentials = Credentials.from_authorized_user_file(str(self.token_path))
+        if credentials.valid:
+            return
+
+        try:
+            credentials.refresh(Request())
+        except RefreshError as e:
+            if not self.interactive:
+                raise RuntimeError(
+                    f"Google rejected the cached token at {self.token_path} "
+                    f"({e.args[0] if e.args else e}). Refresh tokens expire after 7 days "
+                    f"while the OAuth consent screen is in 'Testing' — set it to "
+                    f"'In production' in the Google Cloud console, then run "
+                    f"`python scripts/authorize_sheets.py` to re-authorize. Revoking the "
+                    f"app's access or changing your Google password has the same effect."
+                ) from e
+            rejected = self.token_path.with_name(self.token_path.name + ".rejected")
+            self.token_path.replace(rejected)
+            print(
+                f"Google rejected the cached token "
+                f"({e.args[0] if e.args else e}) — re-authorizing.\n"
+                f"The dead token was moved to {rejected}."
+            )
+        else:
+            self.token_path.write_text(credentials.to_json())
 
     def spreadsheet(self):
         """Open the target spreadsheet, creating it if only a title was given.
@@ -208,11 +269,19 @@ class SheetsStore(ActivityStore):
         """Run a gspread call, turning API failures into the RuntimeError that
         sync.run() already treats as 'stop cleanly and report progress'."""
         gspread = _gspread()
+        _, _, RefreshError = _google_auth()
 
         try:
             return fn(*args, **kwargs)
         except gspread.exceptions.APIError as e:
             raise RuntimeError(f"Google Sheets API error: {e}") from e
+        except RefreshError as e:
+            # Access revoked mid-run. The next run repairs the token itself, but
+            # say so rather than surfacing google-auth's bare "Bad Request".
+            raise RuntimeError(
+                f"Google revoked access partway through ({e.args[0] if e.args else e}). "
+                f"Re-run `python scripts/authorize_sheets.py`, then this again."
+            ) from e
 
     # -- reads -----------------------------------------------------------
 

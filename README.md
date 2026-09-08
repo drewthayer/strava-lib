@@ -98,6 +98,13 @@ this script in a browser. Publishing removes the expiry; for a single-user app y
 can do it without verification, at the cost of one "unverified app" warning at the
 consent screen (click through via *Advanced*).
 
+If a run does report that Google rejected the cached token (`invalid_grant`),
+re-run this script from a terminal. It moves the dead token aside to
+`authorized_user.json.rejected` and starts a fresh approval — necessary because
+gspread opens a browser only when the token file is *missing*, so a file holding
+a dead token would otherwise keep failing no matter how often you re-authorize.
+Then check the publishing status above, or it'll happen again in 7 days.
+
 ### 4c. Seed the sheet from the existing CSV
 
 ```bash
