@@ -8,10 +8,12 @@ API_BASE = "https://www.strava.com/api/v3"
 
 
 class StravaClient:
-    def __init__(self, client_id=None, client_secret=None, refresh_token=None):
+    def __init__(self, client_id=None, client_secret=None, refresh_token=None,
+                 persist_refresh_token=True):
         self.client_id = client_id or config.STRAVA_CLIENT_ID
         self.client_secret = client_secret or config.STRAVA_CLIENT_SECRET
         self.refresh_token = refresh_token or config.STRAVA_REFRESH_TOKEN
+        self.persist_refresh_token = persist_refresh_token
         if not all([self.client_id, self.client_secret, self.refresh_token]):
             raise RuntimeError(
                 "Missing Strava credentials. Set STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, "
@@ -27,8 +29,16 @@ class StravaClient:
         data = auth.refresh_access_token(self.client_id, self.client_secret, self.refresh_token)
         self._access_token = data["access_token"]
         self._expires_at = data["expires_at"]
-        if data.get("refresh_token"):
-            self.refresh_token = data["refresh_token"]
+
+        # Strava usually returns the same refresh token, but it's free to rotate
+        # it at any time. When it does, the old one is dead — so persist the new
+        # one immediately rather than losing it when the process exits.
+        new_refresh_token = data.get("refresh_token")
+        if new_refresh_token and new_refresh_token != self.refresh_token:
+            self.refresh_token = new_refresh_token
+            if self.persist_refresh_token:
+                if config.save_refresh_token(new_refresh_token):
+                    print("Strava rotated the refresh token; saved the new one to .env")
 
     def _request(self, method, path, **kwargs):
         self._ensure_token()

@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 
 class ActivityStore(ABC):
-    """Interface shared by CsvStore and (later) SheetsStore."""
+    """Interface shared by CsvStore and SheetsStore."""
 
     @abstractmethod
     def existing_ids(self):
@@ -19,3 +19,11 @@ class ActivityStore(ABC):
     @abstractmethod
     def append(self, records):
         """Merge new records in, deduping by id."""
+
+    def sort(self):
+        """Order the stored rows by start_date_utc, if that isn't already free.
+
+        Called once at the end of a sync. CsvStore sorts on every append (it
+        rewrites the whole file anyway), so the default is a no-op; SheetsStore
+        overrides it because sorting there costs an API call.
+        """
